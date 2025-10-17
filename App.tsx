@@ -168,8 +168,10 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const App: React.FC = () => {
   const { 
     cwd, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, getCompletions,
-    createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, formatDrive, mountedDrives,
-    writeFile, getNode, resolvePath
+    createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, 
+    formatDrive, mountedDrives, writeFile, getNode, resolvePath,
+    listDisks, selectDisk, listVolumes, selectVolume, createPartitionPrimary, 
+    formatSelectedVolume, deletePartition, cleanDisk
   } = useFileSystem();
 
   const [lines, setLines] = useState<React.ReactNode[]>([
@@ -224,51 +226,71 @@ const App: React.FC = () => {
   };
 
   const handleDiskpartCommand = useCallback((command: string) => {
-    const parts = command.trim().toLowerCase().split(' ');
+    const commandLower = command.trim().toLowerCase();
+    const parts = commandLower.split(/\s+/);
     const cmd = parts[0];
-    
+    const subCmd = parts[1];
+
     switch (cmd) {
-        case 'create':
-            if (parts[1] === 'vdisk' && parts[2]?.startsWith('file=')) {
-                const path = parts[2].split('=')[1].replace(/"/g, '');
-                print(createVDisk(path));
-            } else {
-                print('The specified command is not valid.');
-            }
+        case 'list':
+            if (subCmd === 'disk') return print(listDisks());
+            if (subCmd === 'vdisk') return print(listVDisks());
+            if (subCmd === 'volume' || subCmd === 'partition') return print(listVolumes());
             break;
         case 'select':
-            if (parts[1] === 'vdisk' && parts[2]?.startsWith('file=')) {
-                const path = parts[2].split('=')[1].replace(/"/g, '');
-                print(selectVDisk(path));
-            } else {
-                print('The specified command is not valid.');
+            if (subCmd === 'disk') {
+                const diskNum = parseInt(parts[2], 10);
+                if (!isNaN(diskNum)) return print(selectDisk(diskNum));
+            }
+            if (subCmd === 'vdisk') {
+                const path = command.trim().match(/file=(.*)/i)?.[1].replace(/"/g, '');
+                if (path) return print(selectVDisk(path));
+            }
+            if (subCmd === 'volume' || subCmd === 'partition') {
+                if (parts[2]) return print(selectVolume(parts[2]));
             }
             break;
+        case 'create':
+            if (subCmd === 'partition' && parts[2] === 'primary') return print(createPartitionPrimary());
+            if (subCmd === 'vdisk') {
+                 const path = command.trim().match(/file=(.*)/i)?.[1].replace(/"/g, '');
+                 if(path) return print(createVDisk(path));
+            }
+            break;
+        case 'delete':
+             if (subCmd === 'partition') return print(deletePartition());
+             break;
+        case 'clean':
+             return print(cleanDisk());
+        case 'format': {
+            const fsMatch = commandLower.match(/fs=(\w+)/);
+            const quickMatch = commandLower.includes('quick');
+            if (quickMatch && fsMatch && (fsMatch[1] === 'ntfs')) {
+                return print(formatSelectedVolume());
+            }
+            return print('The arguments specified for this command are not valid.\nUsage: FORMAT FS=NTFS QUICK');
+        }
         case 'attach':
-            if (parts[1] === 'vdisk') print(attachVDisk());
-            else print('The specified command is not valid.');
+            if (subCmd === 'vdisk') return print(attachVDisk());
             break;
         case 'detach':
-            if (parts[1] === 'vdisk') print(detachVDisk());
-            else print('The specified command is not valid.');
-            break;
-        case 'list':
-            if (parts[1] === 'vdisk') print(listVDisks());
-            else print('The specified command is not valid.');
+            if (subCmd === 'vdisk') return print(detachVDisk());
             break;
         case 'detail':
-            if (parts[1] === 'vdisk') print(detailVDisk());
-            else print('The specified command is not valid.');
+            if (subCmd === 'vdisk') return print(detailVDisk());
             break;
         case 'exit':
             setIsDiskpart(false);
-            break;
+            return;
         default:
-            print('The specified command is not valid.');
-            break;
+             break;
     }
-
-  }, [createVDisk, selectVDisk, attachVDisk, detachVDisk, listVDisks, detailVDisk]);
+    print('The specified command is not valid.');
+  }, [
+      createVDisk, selectVDisk, attachVDisk, detachVDisk, listVDisks, detailVDisk, 
+      listDisks, selectDisk, listVolumes, selectVolume, createPartitionPrimary, 
+      formatSelectedVolume, deletePartition, cleanDisk, print
+  ]);
 
 
   const onCommand = useCallback(async (command: string) => {

@@ -5,6 +5,9 @@ const cDriveFileSystem: FSNode = {
   name: 'C:',
   type: FSType.DIRECTORY,
   creationTime: new Date(),
+  isFormatted: true,
+  label: 'System',
+  fileSystem: 'NTFS',
   children: [
     {
       name: 'Users',
@@ -53,6 +56,9 @@ const dDriveFileSystem: FSNode = {
     name: 'D:',
     type: FSType.DIRECTORY,
     creationTime: new Date(),
+    isFormatted: true,
+    label: 'Data',
+    fileSystem: 'NTFS',
     children: [
         {
             name: 'Backup',
@@ -191,6 +197,10 @@ export const useFileSystem = () => {
 
     const [cwd, setCwd] = useState('C:\\Users\\User');
     const [selectedVDiskPath, setSelectedVDiskPath] = useState<string | null>(null);
+    const [diskpartContext, setDiskpartContext] = useState<{
+        selectedDisk: number | null;
+        selectedVolume: string | null; // The drive letter, e.g., 'C:'
+    }>({ selectedDisk: null, selectedVolume: null });
 
     useEffect(() => {
         try {
@@ -606,10 +616,126 @@ ${content}
             const driveRoot = drives.get(driveLetter);
             if (driveRoot) {
                 driveRoot.children = [];
+                driveRoot.isFormatted = true;
+                driveRoot.fileSystem = 'NTFS';
+                driveRoot.label = '';
             }
         });
         return `Formatting drive ${driveLetter}...\nFormat complete.`;
     }, []);
+    
+    // New Diskpart Partition Commands
+    const listDisks = () => {
+        return `
+  Disk ###  Status   Size     Free     Dyn  Gpt
+  --------  -------  -------  -------  ---  ---
+* Disk 0    Online    256 GB   128 GB`;
+    };
+
+    const selectDisk = (index: number) => {
+        if (index === 0) {
+            setDiskpartContext(prev => ({ ...prev, selectedDisk: 0, selectedVolume: null }));
+            return 'Disk 0 is now the selected disk.';
+        }
+        return 'Invalid disk number.';
+    };
+
+    const listVolumes = useCallback(() => {
+        let output = '  Volume ###  Ltr  Label        Fs     Type        Size     Status\n';
+        output +=    '  ----------  ---  -----------  -----  ----------  -------  ---------\n';
+        Array.from(mountedDrives.entries()).forEach(([letter, node], index) => {
+            const ltr = letter.charAt(0);
+            const label = node.label || '';
+            const fs = node.fileSystem || '';
+            const status = node.isFormatted ? 'Healthy' : 'No File System';
+            const isSelected = diskpartContext.selectedVolume === letter ? '*' : ' ';
+            output += `${isSelected} Volume ${index.toString().padEnd(8)} ${ltr.padEnd(2)}  ${label.padEnd(11)}  ${fs.padEnd(5)}  Partition   128 GB   ${status}\n`;
+        });
+        return output;
+    }, [mountedDrives, diskpartContext.selectedVolume]);
+    
+    const selectVolume = useCallback((identifier: string) => {
+        const driveKeys = Array.from(mountedDrives.keys());
+        let foundVolume: string | undefined;
+
+        const isNumeric = /^\d+$/.test(identifier);
+        if (isNumeric) {
+            foundVolume = driveKeys[parseInt(identifier, 10)];
+        } else {
+            const letter = identifier.toUpperCase().replace(':', '') + ':';
+            if (driveKeys.includes(letter)) {
+                foundVolume = letter;
+            }
+        }
+        
+        if (foundVolume) {
+            setDiskpartContext(prev => ({ ...prev, selectedVolume: foundVolume }));
+            const index = driveKeys.indexOf(foundVolume);
+            return `Volume ${index} is the selected volume.`;
+        }
+        return 'The specified volume does not exist.';
+
+    }, [mountedDrives]);
+
+    const createPartitionPrimary = useCallback(() => {
+        if (diskpartContext.selectedDisk === null) return 'There is no disk selected.';
+        const nextLetter = 'EFGHIJKLMNOPQRSTUVWXYZ'.split('').find(l => !mountedDrives.has(l + ':'));
+        if (!nextLetter) return 'There are no available drive letters to create a new partition.';
+        const drive = nextLetter + ':';
+        const newPartitionRoot: FSNode = {
+            name: drive,
+            type: FSType.DIRECTORY,
+            creationTime: new Date(),
+            children: [],
+            isFormatted: false,
+            label: '',
+            fileSystem: null
+        };
+        mutateFileSystem(drives => {
+            drives.set(drive, newPartitionRoot);
+        });
+        return 'DiskPart successfully created the specified partition.';
+    }, [diskpartContext.selectedDisk, mountedDrives]);
+    
+    const formatSelectedVolume = useCallback(() => {
+        const volume = diskpartContext.selectedVolume;
+        if (!volume) return 'There is no volume selected.';
+        if (volume.toUpperCase() === cwd.substring(0, 2).toUpperCase()) {
+            return 'Cannot format the current working drive.';
+        }
+        formatDrive(volume);
+        return '  100 percent completed\n\nDiskPart successfully formatted the volume.';
+    }, [diskpartContext.selectedVolume, cwd, formatDrive]);
+
+    const deletePartition = useCallback(() => {
+        const volume = diskpartContext.selectedVolume;
+        if (!volume) return 'There is no volume selected.';
+        if (volume.toUpperCase() === 'C:') return 'Cannot delete the system partition.';
+         if (volume.toUpperCase() === cwd.substring(0, 2).toUpperCase()) {
+            return 'Cannot delete the current working drive partition.';
+        }
+        mutateFileSystem(drives => {
+            drives.delete(volume);
+        });
+        setDiskpartContext(prev => ({ ...prev, selectedVolume: null }));
+        return 'DiskPart successfully deleted the selected partition.';
+    }, [diskpartContext.selectedVolume, cwd]);
+
+    const cleanDisk = useCallback(() => {
+        if (diskpartContext.selectedDisk === null) return 'There is no disk selected.';
+        if (!cwd.toUpperCase().startsWith('C:')) {
+             return 'Cannot clean disk while active on a non-primary drive. Please cd to C: drive.';
+        }
+        mutateFileSystem(drives => {
+            const cDrive = drives.get('C:');
+            drives.clear();
+            if (cDrive) {
+                drives.set('C:', cDrive);
+            }
+        });
+        setDiskpartContext({ selectedDisk: 0, selectedVolume: null }); // Reselect disk 0
+        return 'DiskPart succeeded in cleaning the disk.';
+    }, [diskpartContext.selectedDisk, cwd]);
 
 
     const getCompletions = useCallback((text: string): FSNode[] => {
@@ -625,5 +751,12 @@ ${content}
     }, [findNode, cwd]);
 
 
-    return { cwd, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, getCompletions, createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, formatDrive, mountedDrives, writeFile, getNode, resolvePath };
+    return { 
+        cwd, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, getCompletions, 
+        createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, 
+        formatDrive, mountedDrives, writeFile, getNode, resolvePath,
+        // Diskpart partition commands
+        listDisks, selectDisk, listVolumes, selectVolume, createPartitionPrimary, 
+        formatSelectedVolume, deletePartition, cleanDisk
+    };
 };

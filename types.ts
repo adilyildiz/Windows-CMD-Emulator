@@ -17,4 +17,8 @@ export interface FSNode {
     isAttached: boolean;
     driveLetter: string | null;
   }
+  // Properties for drive roots
+  isFormatted?: boolean;
+  label?: string;
+  fileSystem?: 'NTFS' | null;
 }
