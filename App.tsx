@@ -325,6 +325,7 @@ const App: React.FC = () => {
           <div className="text-sm">
             <p className="font-bold mb-1">Provides Help information for Windows commands.</p>
             <div className="grid grid-cols-2 gap-x-4">
+              <div><p><span className="w-24 inline-block">ASK</span>Ask Gemini AI a question.</p></div>
               <div><p><span className="w-24 inline-block">ATTRIB</span>Displays or changes file attributes.</p></div>
               <div><p><span className="w-24 inline-block">CD</span>Displays or changes the current directory.</p></div>
               <div><p><span className="w-24 inline-block">CHKDSK</span>Checks a disk and displays a status report.</p></div>
@@ -333,6 +334,7 @@ const App: React.FC = () => {
               <div><p><span className="w-24 inline-block">DEL</span>Deletes one or more files.</p></div>
               <div><p><span className="w-24 inline-block">DIR</span>Displays a list of files and subdirectories.</p></div>
               <div><p><span className="w-24 inline-block">DISKPART</span>Manages disk partitions.</p></div>
+              <div><p><span className="w-24 inline-block">ECHO</span>Displays messages, or redirects to a file.</p></div>
               <div><p><span className="w-24 inline-block">EDIT</span>Edits a text file. Creates if not exists.</p></div>
               <div><p><span className="w-24 inline-block">FC</span>Compares two files and displays differences.</p></div>
               <div><p><span className="w-24 inline-block">FIND</span>Searches for a text string in a file.</p></div>
@@ -349,8 +351,8 @@ const App: React.FC = () => {
               <div><p><span className="w-24 inline-block">SCANDISK</span>Runs a disk scan.</p></div>
               <div><p><span className="w-24 inline-block">TRACERT</span>Traces the route to a host.</p></div>
               <div><p><span className="w-24 inline-block">TYPE</span>Displays the contents of a text file.</p></div>
+              <div><p><span className="w-24 inline-block">WGET</span>Downloads a file from a URL.</p></div>
               <div><p><span className="w-24 inline-block">XCOPY</span>Copies files and directory trees.</p></div>
-              <div><p><span className="w-24 inline-block">ASK</span>Ask Gemini AI a question.</p></div>
             </div>
           </div>
         );
@@ -440,6 +442,53 @@ const App: React.FC = () => {
       case 'diskpart':
         setIsDiskpart(true);
         print('Microsoft DiskPart version 10.0.22621.1\n\nCopyright (C) Microsoft Corporation.\nOn computer: WEB-EMULATOR');
+        break;
+      case 'echo':
+        const redirectionIndex = args.indexOf('>');
+        if (redirectionIndex > -1) {
+            const filePath = args[redirectionIndex + 1];
+            if (!filePath) {
+                print('The syntax of the command is incorrect.');
+                break;
+            }
+            const content = args.slice(0, redirectionIndex).join(' ');
+            writeFile(filePath, content);
+        } else {
+            print(args.join(' '));
+        }
+        break;
+      case 'wget':
+        if (!args[0]) {
+            print('wget: missing URL. Usage: wget <URL>');
+            break;
+        }
+        const url = args[0];
+        let fileName = url.split('/').pop()?.split('?')[0] || 'index.html';
+        if (!fileName.includes('.')) fileName = 'index.html';
+
+        print(`--\n=> ${url}`);
+        print(`Resolving ${url}... done.`);
+        await sleep(150);
+        print(`Connecting to ${url}... connected.`);
+        print(`HTTP request sent, awaiting response... 200 OK`);
+        await sleep(200);
+        print(`Length: 128 (128 B) [text/html]`);
+        print(`Saving to: ‘${fileName}’`);
+        await sleep(200);
+
+        print(`[===================>] 100%`);
+        
+        const fakeContent = `<html>
+<head><title>Downloaded page</title></head>
+<body>
+    <h1>Content from ${url}</h1>
+    <p>This is a simulated downloaded file.</p>
+</body>
+</html>`;
+        writeFile(fileName, fakeContent);
+        await sleep(50);
+        print(`\nFinished.`);
+        print(`'${fileName}' saved [${fakeContent.length}]`);
         break;
       // Simulated commands
       case 'hostname':
