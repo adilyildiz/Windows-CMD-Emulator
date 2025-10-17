@@ -1,0 +1,5 @@
+{
+  "name": "Windows CMD Emulator",
+  "description": "A React-based web application that emulates the functionality of the Windows Command Prompt, complete with a virtual file system and common CMD commands.",
+  "requestFramePermissions": []
+}
