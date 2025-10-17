@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { FSNode, FSType } from '../types';
 
-const initialFileSystem: FSNode = {
+const cDriveFileSystem: FSNode = {
   name: 'C:',
   type: FSType.DIRECTORY,
   creationTime: new Date(),
@@ -48,6 +48,33 @@ const initialFileSystem: FSNode = {
     },
   ],
 };
+
+const dDriveFileSystem: FSNode = {
+    name: 'D:',
+    type: FSType.DIRECTORY,
+    creationTime: new Date(),
+    children: [
+        {
+            name: 'Backup',
+            type: FSType.DIRECTORY,
+            creationTime: new Date(),
+            children: []
+        },
+        {
+            name: 'Work.log',
+            type: FSType.FILE,
+            content: 'Log file for D drive.',
+            creationTime: new Date(),
+            size: 22,
+            attributes: { readOnly: false }
+        }
+    ]
+};
+
+const initialDrives = new Map<string, FSNode>([
+    ['C:', cDriveFileSystem],
+    ['D:', dDriveFileSystem]
+]);
 
 
 const formatDate = (date: Date) => {
@@ -156,10 +183,10 @@ export const useFileSystem = () => {
                 return new Map(parsedArray);
             } catch (e) {
                 console.error("Failed to parse file system from localStorage", e);
-                return new Map([['C:', initialFileSystem]]);
+                return initialDrives;
             }
         }
-        return new Map([['C:', initialFileSystem]]);
+        return initialDrives;
     });
 
     const [cwd, setCwd] = useState('C:\\Users\\User');
@@ -494,7 +521,7 @@ ${content}
         const { node } = findNodeAndParent(selectedVDiskPath);
         if (!node?.vDiskInfo || node.vDiskInfo.isAttached) return 'The virtual disk is already attached.';
 
-        const nextLetter = 'DEFGH'.split('').find(l => !mountedDrives.has(l + ':'));
+        const nextLetter = 'EFGHIJKLMNOPQRSTUVWXYZ'.split('').find(l => !mountedDrives.has(l + ':'));
         if (!nextLetter) return 'No available drive letters.';
         const drive = nextLetter + ':';
 
@@ -582,7 +609,7 @@ ${content}
             }
         });
         return `Formatting drive ${driveLetter}...\nFormat complete.`;
-    }, [mountedDrives]);
+    }, []);
 
 
     const getCompletions = useCallback((text: string): FSNode[] => {
