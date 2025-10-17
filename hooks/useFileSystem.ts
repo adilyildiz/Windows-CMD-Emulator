@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { FSNode, FSType } from '../types';
 
 const initialFileSystem: FSNode = {
@@ -70,31 +70,34 @@ const getDriveLetterFromPath = (path: string): string => {
     return '';
 }
 
-export const useFileSystem = () => {
-    const [mountedDrives, setMountedDrives] = useState<Map<string, FSNode>>(new Map([['C:', initialFileSystem]]));
-    const [cwd, setCwd] = useState('C:\\Users\\User');
-    const [selectedVDiskPath, setSelectedVDiskPath] = useState<string | null>(null);
-
-    const getRootForPath = useCallback((path: string): FSNode | undefined => {
-        const driveLetter = getDriveLetterFromPath(path) || getDriveLetterFromPath(cwd);
-        return mountedDrives.get(driveLetter);
-    }, [mountedDrives, cwd]);
-
-    const resolvePath = useCallback((path: string): string => {
-        const currentDrive = getDriveLetterFromPath(cwd);
-        let targetDrive = getDriveLetterFromPath(path) || currentDrive;
-        if (!mountedDrives.has(targetDrive)) {
-             return path; // Invalid drive
+// Pure helper function to find a node within a given file system state (Map of drives)
+const findNodeAndParentOnDrives = (
+    path: string, 
+    drives: Map<string, FSNode>, 
+    currentWorkingDir: string
+): { node: FSNode | null, parent: FSNode | null, nodeName: string, fsRoot: FSNode | null } => {
+    
+    // Pure version of resolvePath, operating on the provided drives map and cwd
+    const resolvePathPure = (pathToResolve: string): string => {
+        const getDrive = (p: string): string => {
+            if (p.includes(':')) { return p.split(':')[0].toUpperCase() + ':'; }
+            return '';
+        }
+        const currentDrive = getDrive(currentWorkingDir);
+        let targetDrive = (getDrive(pathToResolve) || currentDrive).toUpperCase();
+        if (!drives.has(targetDrive)) {
+             return pathToResolve;
         }
         
-        if (path.match(/^[a-zA-Z]:\\?$/)) { // e.g. C: or C:\
+        if (pathToResolve.match(/^[a-zA-Z]:\\?$/)) {
             return targetDrive + '\\';
         }
 
-        const basePath = path.toUpperCase().startsWith(targetDrive.toUpperCase()) ? targetDrive : cwd;
-        const pathParts = path.replace(/^[a-zA-Z]:\\?/, '').split('\\').filter(p => p);
+        const isAbsolutePath = pathToResolve.toUpperCase().startsWith(targetDrive);
+        const basePath = isAbsolutePath ? targetDrive + '\\' : currentWorkingDir;
         
-        let newPathParts = basePath === targetDrive ? [] : basePath.split('\\').filter(p => p && p.toUpperCase() !== targetDrive.toUpperCase());
+        let pathParts = (isAbsolutePath ? pathToResolve.substring(targetDrive.length + 1) : pathToResolve).split('\\').filter(p => p);
+        let newPathParts = basePath.split('\\').filter(p => p && p.toUpperCase() !== targetDrive.toUpperCase());
 
         for (const part of pathParts) {
             if (part === '..') {
@@ -103,7 +106,99 @@ export const useFileSystem = () => {
                 newPathParts.push(part);
             }
         }
-        return targetDrive + '\\' + newPathParts.join('\\');
+        return targetDrive + (newPathParts.length > 0 ? '\\' + newPathParts.join('\\') : '');
+    };
+
+    const resolvedPath = resolvePathPure(path);
+    const driveLetter = getDriveLetterFromPath(resolvedPath);
+    const fsRoot = drives.get(driveLetter);
+
+    if (!fsRoot) return { node: null, parent: null, nodeName: '', fsRoot: null };
+
+    const parts = resolvedPath.split('\\').filter(p => p && p.toUpperCase() !== driveLetter.toUpperCase());
+    
+    if (parts.length === 0) {
+        return { node: fsRoot, parent: null, nodeName: driveLetter, fsRoot };
+    }
+    
+    let currentNode: FSNode = fsRoot;
+    let parentNode: FSNode | null = null;
+    
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const foundChild = currentNode.children?.find(child => child.name.toLowerCase() === part.toLowerCase());
+        if (foundChild) {
+            parentNode = currentNode;
+            currentNode = foundChild;
+        } else {
+             if (i === parts.length - 1) {
+                return { node: null, parent: currentNode, nodeName: part, fsRoot };
+            }
+            return { node: null, parent: null, nodeName: part, fsRoot: null };
+        }
+    }
+
+    return { node: currentNode, parent: parentNode, nodeName: parts[parts.length - 1], fsRoot };
+};
+
+
+export const useFileSystem = () => {
+    const [mountedDrives, setMountedDrives] = useState<Map<string, FSNode>>(() => {
+        const savedFS = localStorage.getItem('cmd_emulator_fs');
+        if (savedFS) {
+            try {
+                const parsedArray = JSON.parse(savedFS, (key, value) => {
+                    if (key === 'creationTime' && typeof value === 'string') {
+                        return new Date(value);
+                    }
+                    return value;
+                });
+                return new Map(parsedArray);
+            } catch (e) {
+                console.error("Failed to parse file system from localStorage", e);
+                return new Map([['C:', initialFileSystem]]);
+            }
+        }
+        return new Map([['C:', initialFileSystem]]);
+    });
+
+    const [cwd, setCwd] = useState('C:\\Users\\User');
+    const [selectedVDiskPath, setSelectedVDiskPath] = useState<string | null>(null);
+
+    useEffect(() => {
+        try {
+            const arrayToSave = Array.from(mountedDrives.entries());
+            localStorage.setItem('cmd_emulator_fs', JSON.stringify(arrayToSave));
+        } catch (e) {
+            console.error("Failed to save file system to localStorage", e);
+        }
+    }, [mountedDrives]);
+
+    const resolvePath = useCallback((path: string): string => {
+        const currentDrive = getDriveLetterFromPath(cwd);
+        let targetDrive = (getDriveLetterFromPath(path) || currentDrive).toUpperCase();
+        if (!mountedDrives.has(targetDrive)) {
+             return path; // Invalid drive
+        }
+        
+        if (path.match(/^[a-zA-Z]:\\?$/)) { // e.g. C: or C:\
+            return targetDrive + '\\';
+        }
+
+        const isAbsolutePath = path.toUpperCase().startsWith(targetDrive);
+        const basePath = isAbsolutePath ? targetDrive + '\\' : cwd;
+        
+        let pathParts = (isAbsolutePath ? path.substring(targetDrive.length + 1) : path).split('\\').filter(p => p);
+        let newPathParts = basePath.split('\\').filter(p => p && p.toUpperCase() !== targetDrive.toUpperCase());
+
+        for (const part of pathParts) {
+            if (part === '..') {
+                newPathParts.pop();
+            } else if (part !== '.' && part !== '') {
+                newPathParts.push(part);
+            }
+        }
+        return targetDrive + (newPathParts.length > 0 ? '\\' + newPathParts.join('\\') : '');
     }, [cwd, mountedDrives]);
 
 
@@ -141,13 +236,26 @@ export const useFileSystem = () => {
     }, [resolvePath, mountedDrives]);
 
     const findNode = useCallback((path: string) => findNodeAndParent(path).node, [findNodeAndParent]);
+    const getNode = useCallback((path: string) => findNode(path), [findNode]);
 
+    const mutateFileSystem = (mutator: (drives: Map<string, FSNode>) => void) => {
+        setMountedDrives(prevDrives => {
+            const newDrives = new Map<string, FSNode>();
+            for (const [letter, fs] of prevDrives.entries()) {
+                newDrives.set(letter, deepCopyNode(fs));
+            }
+            mutator(newDrives);
+            return newDrives;
+        });
+    };
+    
+    // Read-only commands
     const cd = useCallback((path: string) => {
         if (!path) {
             return cwd;
         }
 
-        if (path.match(/^[a-zA-Z]:$/i)) { // Drive change only, e.g., "D:"
+        if (path.match(/^[a-zA-Z]:$/i)) {
             const drive = path.toUpperCase();
             if (mountedDrives.has(drive)) {
                 setCwd(drive + '\\');
@@ -195,56 +303,66 @@ ${content}
         return targetNode.content || '';
     }, [findNode]);
 
-    const mutateFileSystem = (mutator: (drives: Map<string, FSNode>) => void) => {
-        setMountedDrives(prevDrives => {
-            const newDrives = new Map<string, FSNode>();
-            for (const [letter, fs] of prevDrives.entries()) {
-                newDrives.set(letter, deepCopyNode(fs));
+    // Mutating commands
+    const writeFile = useCallback((path: string, content: string) => {
+        mutateFileSystem((drives) => {
+            const { node, parent, nodeName } = findNodeAndParentOnDrives(path, drives, cwd);
+
+            if (node && node.type === FSType.FILE) {
+                node.content = content;
+                node.size = content.length;
+            } else if (!node && parent && parent.type === FSType.DIRECTORY) {
+                if (!parent.children) parent.children = [];
+                parent.children.push({
+                    name: nodeName,
+                    type: FSType.FILE,
+                    content: content,
+                    size: content.length,
+                    creationTime: new Date(),
+                    attributes: { readOnly: false },
+                });
             }
-            mutator(newDrives);
-            return newDrives;
         });
-    };
+        return '';
+    }, [cwd]);
 
     const del = useCallback((path: string) => {
-        const { node, parent } = findNodeAndParent(path);
+        const { node } = findNodeAndParent(path);
         if (!node) return 'The system cannot find the file specified.';
         if (node.type === FSType.DIRECTORY) return 'Access is denied.';
         if (node.attributes?.readOnly) return 'Access is denied.';
 
-        if (parent && parent.children) {
-            mutateFileSystem(drives => {
-                const { parent: newParent } = findNodeAndParent(path);
-                if (newParent && newParent.children) {
-                    newParent.children = newParent.children.filter(child => child.name.toLowerCase() !== node.name.toLowerCase());
-                }
-            });
-            return '';
-        }
-        return 'An unexpected error occurred.';
-    }, [findNodeAndParent]);
+        mutateFileSystem((drives) => {
+            const { node: nodeToDelete, parent } = findNodeAndParentOnDrives(path, drives, cwd);
+            if (parent?.children && nodeToDelete) {
+                parent.children = parent.children.filter(child => child.name.toLowerCase() !== nodeToDelete.name.toLowerCase());
+            }
+        });
+        return '';
+    }, [findNodeAndParent, cwd]);
 
     const ren = useCallback((oldPath: string, newName: string) => {
          const { node } = findNodeAndParent(oldPath);
          if (!node) return 'The system cannot find the file specified.';
          
-         mutateFileSystem(() => {
-            const { node: nodeToRename } = findNodeAndParent(oldPath);
+         mutateFileSystem((drives) => {
+            const { node: nodeToRename } = findNodeAndParentOnDrives(oldPath, drives, cwd);
             if (nodeToRename) {
                 nodeToRename.name = newName;
             }
         });
         return '';
-    }, [findNodeAndParent]);
+    }, [findNodeAndParent, cwd]);
 
     const md = useCallback((path: string) => {
-        const { node, parent, nodeName } = findNodeAndParent(path);
+        const { node, parent } = findNodeAndParent(path);
         if (node) return 'A subdirectory or file with that name already exists.';
         if (!parent) return 'The system cannot find the path specified.';
         
-        mutateFileSystem(() => {
-            const { parent: newParent } = findNodeAndParent(path);
-            if (newParent && newParent.children) {
+        mutateFileSystem((drives) => {
+            const { parent: newParent, nodeName } = findNodeAndParentOnDrives(path, drives, cwd);
+            if (newParent && newParent.type === FSType.DIRECTORY) {
+                 if(!newParent.children) newParent.children = [];
                  newParent.children.push({
                     name: nodeName,
                     type: FSType.DIRECTORY,
@@ -254,25 +372,22 @@ ${content}
             }
         });
         return '';
-    }, [findNodeAndParent]);
+    }, [findNodeAndParent, cwd]);
 
     const rd = useCallback((path: string) => {
-        const { node, parent } = findNodeAndParent(path);
+        const { node } = findNodeAndParent(path);
         if (!node) return 'The system cannot find the path specified.';
         if (node.type !== FSType.DIRECTORY) return 'The filename, directory name, or volume label syntax is incorrect.';
         if (node.children && node.children.length > 0) return 'The directory is not empty.';
 
-        if (parent && parent.children) {
-            mutateFileSystem(() => {
-                const { parent: newParent } = findNodeAndParent(path);
-                if (newParent && newParent.children) {
-                    newParent.children = newParent.children.filter(child => child.name.toLowerCase() !== node.name.toLowerCase());
-                }
-            });
-            return '';
-        }
-        return 'An unexpected error occurred.';
-    }, [findNodeAndParent]);
+        mutateFileSystem((drives) => {
+            const { node: nodeToDelete, parent } = findNodeAndParentOnDrives(path, drives, cwd);
+            if (parent?.children && nodeToDelete) {
+                 parent.children = parent.children.filter(child => child.name.toLowerCase() !== nodeToDelete.name.toLowerCase());
+            }
+        });
+        return '';
+    }, [findNodeAndParent, cwd]);
 
     const attrib = useCallback((flags: string, path: string) => {
         const { node } = findNodeAndParent(path);
@@ -281,16 +396,16 @@ ${content}
         const setReadOnly = flags.includes('+r');
         const removeReadOnly = flags.includes('-r');
 
-        mutateFileSystem(() => {
-            const { node: nodeToChange } = findNodeAndParent(path);
-            if(nodeToChange) {
+        mutateFileSystem((drives) => {
+            const { node: nodeToChange } = findNodeAndParentOnDrives(path, drives, cwd);
+            if(nodeToChange && nodeToChange.type === FSType.FILE) {
                 if (!nodeToChange.attributes) nodeToChange.attributes = { readOnly: false };
                 if(setReadOnly) nodeToChange.attributes.readOnly = true;
                 if(removeReadOnly) nodeToChange.attributes.readOnly = false;
             }
         });
         return '';
-    }, [findNodeAndParent]);
+    }, [findNodeAndParent, cwd]);
     
     const fc = useCallback((path1: string, path2: string) => {
         const node1 = findNode(path1);
@@ -316,21 +431,15 @@ ${content}
         const { node: sourceNode } = findNodeAndParent(sourcePath);
         if (!sourceNode) return `File not found - ${sourcePath}`;
         
-        mutateFileSystem(() => {
-            const { node: newSourceNode } = findNodeAndParent(sourcePath);
-            let { node: newDestNode, parent: newDestParent, nodeName: newDestName } = findNodeAndParent(destPath);
-            if (!newSourceNode || !newDestParent) return;
+        const copiedSource = deepCopyNode(sourceNode);
+         if (!recursive && copiedSource.type === FSType.DIRECTORY) {
+             copiedSource.children = copiedSource.children?.filter(c => c.type === FSType.FILE);
+         }
 
-            const copyNode = (nodeToCopy: FSNode): FSNode => {
-                 if (!recursive && nodeToCopy.type === FSType.DIRECTORY) {
-                     const newDir = deepCopyNode(nodeToCopy);
-                     newDir.children = newDir.children?.filter(c => c.type === FSType.FILE);
-                     return newDir;
-                 }
-                 return deepCopyNode(nodeToCopy);
-            };
-            const copiedSource = copyNode(newSourceNode);
-            
+        mutateFileSystem((drives) => {
+            const { node: newDestNode, parent: newDestParent, nodeName: newDestName } = findNodeAndParentOnDrives(destPath, drives, cwd);
+            if (!newDestParent) return;
+
             if (newDestNode && newDestNode.type === FSType.DIRECTORY) {
                 if (!newDestNode.children) newDestNode.children = [];
                 newDestNode.children.push(copiedSource);
@@ -341,35 +450,35 @@ ${content}
             }
         });
         return `Copied 1 file(s).`;
-    }, [findNodeAndParent]);
+    }, [findNodeAndParent, cwd]);
 
     // Diskpart commands
     const createVDisk = useCallback((path: string) => {
         if (!path.toLowerCase().endsWith('.vhd')) {
             return 'The filename, directory name, or volume label syntax is incorrect. (Must be .vhd)';
         }
-        const { node, parent, nodeName } = findNodeAndParent(path);
+        const { node, parent } = findNodeAndParent(path);
         if (node) return 'A file with that name already exists.';
         if (!parent) return 'The system cannot find the path specified.';
 
         const vdiskRoot: FSNode = { name: 'VDiskRoot', type: FSType.DIRECTORY, children: [], creationTime: new Date() };
         
-        mutateFileSystem(() => {
-            const { parent: newParent } = findNodeAndParent(path);
-            if (newParent && newParent.children) {
+        mutateFileSystem((drives) => {
+            const { parent: newParent, nodeName } = findNodeAndParentOnDrives(path, drives, cwd);
+            if (newParent?.children) {
                  newParent.children.push({
                     name: nodeName,
                     type: FSType.FILE,
                     creationTime: new Date(),
                     content: JSON.stringify(vdiskRoot),
-                    size: 1024, // Simulated size
+                    size: 1024,
                     attributes: { readOnly: false },
                     vDiskInfo: { isAttached: false, driveLetter: null }
                  });
             }
         });
         return '  100 percent completed\n\nDiskPart successfully created the virtual disk file.';
-    }, [findNodeAndParent]);
+    }, [findNodeAndParent, cwd]);
 
     const selectVDisk = useCallback((path: string) => {
         const { node } = findNodeAndParent(path);
@@ -393,14 +502,9 @@ ${content}
             const vdiskRoot = JSON.parse(node.content || '{}');
             vdiskRoot.name = drive;
 
-            setMountedDrives(prev => {
-                const newDrives = new Map(prev);
-                newDrives.set(drive, vdiskRoot);
-                return newDrives;
-            });
-
-            mutateFileSystem(() => {
-                const { node: vdiskNode } = findNodeAndParent(selectedVDiskPath);
+            mutateFileSystem(drives => {
+                drives.set(drive, vdiskRoot);
+                const { node: vdiskNode } = findNodeAndParentOnDrives(selectedVDiskPath, drives, cwd);
                 if (vdiskNode?.vDiskInfo) {
                     vdiskNode.vDiskInfo.isAttached = true;
                     vdiskNode.vDiskInfo.driveLetter = drive;
@@ -410,7 +514,7 @@ ${content}
         } catch (e) {
             return 'The virtual disk file is corrupted.';
         }
-    }, [selectedVDiskPath, mountedDrives, findNodeAndParent]);
+    }, [selectedVDiskPath, mountedDrives, findNodeAndParent, cwd]);
     
     const detachVDisk = useCallback(() => {
         if (!selectedVDiskPath) return 'There is no virtual disk selected.';
@@ -421,26 +525,19 @@ ${content}
         if (driveLetter) {
             mutateFileSystem(drives => {
                 const vdiskFS = drives.get(driveLetter);
-                const { node: vdiskNode } = findNodeAndParent(selectedVDiskPath);
+                drives.delete(driveLetter);
+                const { node: vdiskNode } = findNodeAndParentOnDrives(selectedVDiskPath, drives, cwd);
                 if(vdiskFS && vdiskNode) {
                     vdiskNode.content = JSON.stringify(vdiskFS);
-                }
-            });
-            setMountedDrives(prev => {
-                const newDrives = new Map(prev);
-                newDrives.delete(driveLetter);
-                return newDrives;
-            });
-             mutateFileSystem(() => {
-                const { node: vdiskNode } = findNodeAndParent(selectedVDiskPath);
-                if (vdiskNode?.vDiskInfo) {
-                    vdiskNode.vDiskInfo.isAttached = false;
-                    vdiskNode.vDiskInfo.driveLetter = null;
+                    if (vdiskNode.vDiskInfo) {
+                        vdiskNode.vDiskInfo.isAttached = false;
+                        vdiskNode.vDiskInfo.driveLetter = null;
+                    }
                 }
             });
         }
         return 'DiskPart successfully detached the virtual disk file.';
-    }, [selectedVDiskPath, findNodeAndParent]);
+    }, [selectedVDiskPath, findNodeAndParent, cwd]);
 
     const detailVDisk = useCallback(() => {
         if (!selectedVDiskPath) return 'There is no virtual disk selected.';
@@ -501,5 +598,5 @@ ${content}
     }, [findNode, cwd]);
 
 
-    return { cwd, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, getCompletions, createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, formatDrive, mountedDrives };
+    return { cwd, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, getCompletions, createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, formatDrive, mountedDrives, writeFile, getNode, resolvePath };
 };

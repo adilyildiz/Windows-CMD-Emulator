@@ -2,6 +2,8 @@ import React, { useState, useCallback } from 'react';
 import { Terminal } from './components/Terminal';
 import { useFileSystem } from './hooks/useFileSystem';
 import { GoogleGenAI } from '@google/genai';
+import { Editor } from './components/Editor';
+import { FSType } from './types';
 
 const fakeDns: { [key: string]: string } = {
   // --- Special Cases ---
@@ -166,7 +168,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const App: React.FC = () => {
   const { 
     cwd, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, getCompletions,
-    createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, formatDrive, mountedDrives
+    createVDisk, selectVDisk, attachVDisk, detachVDisk, detailVDisk, listVDisks, formatDrive, mountedDrives,
+    writeFile, getNode, resolvePath
   } = useFileSystem();
 
   const [lines, setLines] = useState<React.ReactNode[]>([
@@ -177,6 +180,7 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<string[]>([]);
   const [isDiskpart, setIsDiskpart] = useState(false);
   const [confirmation, setConfirmation] = useState<{ onConfirm: () => void, prompt: string } | null>(null);
+  const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null);
 
 
   const print = useCallback((text: string | React.ReactNode) => {
@@ -191,6 +195,15 @@ const App: React.FC = () => {
     const prompt = confirmation ? '' : (isDiskpart ? 'DISKPART>' : `${cwd}>`);
     setLines(prev => [...prev, `${prompt}${command}`]);
   }, [cwd, isDiskpart, confirmation]);
+
+  const handleSaveFile = (path: string, content: string) => {
+      writeFile(path, content);
+      setEditingFile(null);
+  };
+
+  const handleCancelEdit = () => {
+      setEditingFile(null);
+  };
 
   const runGemini = async (prompt: string) => {
     print('Asking Gemini...');
@@ -298,6 +311,7 @@ const App: React.FC = () => {
               <div><p><span className="w-24 inline-block">DEL</span>Deletes one or more files.</p></div>
               <div><p><span className="w-24 inline-block">DIR</span>Displays a list of files and subdirectories.</p></div>
               <div><p><span className="w-24 inline-block">DISKPART</span>Manages disk partitions.</p></div>
+              <div><p><span className="w-24 inline-block">EDIT</span>Edits a text file. Creates if not exists.</p></div>
               <div><p><span className="w-24 inline-block">FC</span>Compares two files and displays differences.</p></div>
               <div><p><span className="w-24 inline-block">FIND</span>Searches for a text string in a file.</p></div>
               <div><p><span className="w-24 inline-block">FORMAT</span>Formats a disk.</p></div>
@@ -336,6 +350,32 @@ const App: React.FC = () => {
         if (args.length === 0) print('ask: Please provide a question to ask Gemini.');
         else await runGemini(args.join(' '));
         break;
+      case 'edit': {
+        if (!args[0]) {
+            print('The syntax of the command is incorrect. Usage: edit <filename>');
+            break;
+        }
+        const filePath = resolvePath(args[0]);
+        const node = getNode(filePath);
+
+        if (node && node.type === FSType.DIRECTORY) {
+            print(`Error: Cannot edit a directory.`);
+            break;
+        }
+
+        if (!node) {
+            const parentPath = filePath.substring(0, filePath.lastIndexOf('\\')) || filePath.substring(0, 2);
+            const parentNode = getNode(parentPath);
+            if (!parentNode || parentNode.type !== FSType.DIRECTORY) {
+                print('The system cannot find the path specified.');
+                break;
+            }
+        }
+        
+        const initialContent = node?.content || '';
+        setEditingFile({ path: filePath, content: initialContent });
+        break;
+      }
       case 'del':
         if (!args[0]) print('The syntax of the command is incorrect.');
         else print(del(args[0]));
@@ -550,10 +590,18 @@ Total # of avail free bytes  : 18446744073709551615
         print('operable program or batch file.');
         break;
     }
-  }, [print, printCommand, isDiskpart, handleDiskpartCommand, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, formatDrive, getCompletions, cwd, confirmation, mountedDrives]);
+  }, [print, printCommand, isDiskpart, handleDiskpartCommand, dir, cd, type, del, ren, md, rd, attrib, fc, findCmd, xcopy, formatDrive, getCompletions, cwd, confirmation, mountedDrives, resolvePath, getNode, writeFile]);
 
   return (
-    <div className="bg-black text-gray-300 font-mono h-screen p-4">
+    <div className="bg-black text-gray-300 font-mono h-screen p-4 relative">
+      {editingFile && (
+        <Editor
+          filePath={editingFile.path}
+          initialContent={editingFile.content}
+          onSave={handleSaveFile}
+          onCancel={handleCancelEdit}
+        />
+      )}
       <Terminal
         lines={lines}
         history={history}
